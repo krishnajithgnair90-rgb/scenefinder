@@ -1,1 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SceneFinder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #0f172a; color: #f8fafc; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    .container { width: 100%; max-width: 600px; display: flex; flex-direction: column; gap: 16px; }
+    h1 { font-size: 1.6rem; text-align: center; color: #38bdf8; margin-bottom: 8px; }
+    .card { background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; }
+    label { font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px; display: block; }
+    input[type="text"], input[type="file"] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; margin-bottom: 12px; }
+    button { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #0284c7; color: white; font-weight: bold; font-size: 1rem; cursor: pointer; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    #preview { max-width: 100%; border-radius: 8px; margin-top: 10px; display: none; }
+    .result-card { margin-top: 16px; background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #38bdf8; display: none; }
+    .result-card img { width: 100%; border-radius: 8px; margin-bottom: 12px; }
+    .result-title { font-size: 1.3rem; font-weight: bold; color: #38bdf8; margin-bottom: 4px; }
+    .result-meta { font-size: 0.85rem; color: #94a3b8; margin-bottom: 10px; }
+    .result-overview { font-size: 0.95rem; line-height: 1.4; color: #e2e8f0; }
+    .footer { text-align: center; font-size: 0.75rem; color: #64748b; margin-top: 24px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>🎬 SceneFinder</h1>
+
+  <div class="card">
+    <label>TMDB API Key</label>
+    <input type="text" id="tmdbKey" value="c210516912a4fb0610a71b86b126180a">
+
+    <label>Google AI Studio (Gemini) API Key</label>
+    <input type="text" id="geminiKey" placeholder="Paste your AI Studio Key here">
+
+    <label>Select Screenshot / Frame</label>
+    <input type="file" id="imageInput" accept="image/*">
+    <img id="preview" alt="Preview">
+
+    <button id="searchBtn" onclick="runSceneFinder()">Identify Scene</button>
+  </div>
+
+  <div id="status" style="text-align:center; font-size:0.9rem; color:#38bdf8;"></div>
+
+  <div id="resultBox" class="result-card">
+    <img id="moviePoster" src="" alt="Movie Poster" style="display:none;">
+    <div id="movieTitle" class="result-title"></div>
+    <div id="movieMeta" class="result-meta"></div>
+    <div id="movieOverview" class="result-overview"></div>
+  </div>
+
+  <div class="footer">
+    This product uses the TMDB API but is not endorsed or certified by TMDB. Powered by Google Gemini Flash.
+  </div>
+</div>
+
+<script>
+  let base64Image = "";
+
+  document.getElementById('imageInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        document.getElementById('preview').src = evt.target.result;
+        document.getElementById('preview').style.display = 'block';
+        base64Image = evt.target.result.split(',')[1];
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+
+  async function runSceneFinder() {
+    const geminiKey = document.getElementById('geminiKey').value.trim();
+    const tmdbKey = document.getElementById('tmdbKey').value.trim();
+    const status = document.getElementById('status');
+    const resultBox = document.getElementById('resultBox');
+
+    if (!geminiKey) { alert('Please enter your Google AI Studio API key.'); return; }
+    if (!base64Image) { alert('Please select a screenshot or clip frame first.'); return; }
+
+    status.innerText = "Analyzing frame with Gemini...";
+    resultBox.style.display = "none";
+
+    try {
+      // 1. Analyze frame with Gemini 2.5 Flash
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+      const geminiPayload = {
+        contents: [{
+          parts: [
+            { text: "Identify the exact movie or series title from this frame. Return ONLY the title name, nothing else." },
+            { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+          ]
+        }]
+      };
+
+      const geminiRes = await fetch(geminiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(geminiPayload)
+      });
+
+      const geminiData = await geminiRes.json();
+      const detectedTitle = geminiData.candidates[0].content.parts[0].text.trim().replace(/[*_#]/g, '');
+
+      status.innerText = `Detected: "${detectedTitle}". Fetching metadata...`;
+
+      // 2. Fetch metadata from TMDB
+      const tmdbUrl = `https://api.themoviedb.org/3/search/movie?api_key=${tmdbKey}&query=${encodeURIComponent(detectedTitle)}`;
+      const tmdbRes = await fetch(tmdbUrl);
+      const tmdbData = await tmdbRes.json();
+
+      if (tmdbData.results && tmdbData.results.length > 0) {
+        const movie = tmdbData.results[0];
+        document.getElementById('movieTitle').innerText = movie.title;
+        document.getElementById('movieMeta').innerText = `Release Date: ${movie.release_date || 'N/A'} | Rating: ⭐ ${movie.vote_average || 'N/A'}`;
+        document.getElementById('movieOverview').innerText = movie.overview || "No synopsis available.";
+        
+        const poster = document.getElementById('moviePoster');
+        if (movie.poster_path) {
+          poster.src = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+          poster.style.display = 'block';
+        } else {
+          poster.style.display = 'none';
+        }
+
+        resultBox.style.display = "block";
+        status.innerText = "Match found!";
+      } else {
+        status.innerText = `Detected "${detectedTitle}", but no exact entry was found on TMDB.`;
+      }
+    } catch (err) {
+      console.error(err);
+      status.innerText = "Error identifying scene. Check console or API keys.";
+    }
+  }
+</script>
+
+</body>
+</html>
 
